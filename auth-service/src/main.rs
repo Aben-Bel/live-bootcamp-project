@@ -1,19 +1,25 @@
-use axum::{response::Html, routing::get, Router};
+use std::{collections::HashMap, sync::Arc};
+
+use auth_service::{app_state::AppState, services::hashmap_user_store::HashmapUserStore, Application};
+use axum::{response::Html };
+use tokio::sync::RwLock;
 use tower_http::services::ServeDir;
 
 #[tokio::main]
 async fn main() {
-    let app = Router::new()
-        .nest_service("/", ServeDir::new("assets"))
-        .route("/hello", get(hello_handler));
+    let user_store = Arc::new(RwLock::new(HashmapUserStore {
+        users : HashMap::new()
+    })); 
 
-    // Here we are using ip 0.0.0.0 so the service is listening on all the configured network interfaces.
-    // This is needed for Docker to work, which we will add later on.
-    // See: https://stackoverflow.com/questions/39525820/docker-port-forwarding-not-working
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    println!("listening on {}", listener.local_addr().unwrap());
+    let app_state = AppState {
+        user_store : user_store
+    }; 
 
-    axum::serve(listener, app).await.unwrap();
+    let app = Application::build(app_state, "0.0.0.0:3000")
+        .await
+        .expect("Failed to build app");
+
+    app.run().await.expect("Failed to run app");
 }
 
 async fn hello_handler() -> Html<&'static str> {

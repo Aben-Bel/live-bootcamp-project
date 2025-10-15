@@ -4,8 +4,13 @@ use axum::{routing::{post}, serve::Serve, Router};
 use tower_http::services::ServeDir;
 
 use crate::routes::{login, logout, signup, verify_2fa, verify_token};
+use app_state::AppState;
 
 pub mod routes;
+pub mod services;
+pub mod domain;
+pub mod app_state;
+
 // This struct encapsulates our application-related logic.
 pub struct Application {
     server: Serve<Router, Router>,
@@ -15,18 +20,16 @@ pub struct Application {
 }
 
 impl Application {
-    pub async fn build(address: &str) -> Result<Self, Box<dyn Error>> {
-        // Move the Router definition from `main.rs` to here.
-        // Also, remove the `hello` route.
-        // We don't need it at this point!
+    pub async fn build(app_state: AppState, address: &str) -> Result<Self, Box<dyn Error>> {
         let router = Router::new()
             .nest_service("/", ServeDir::new("assets"))
-            // TODO: Add all other routes
+            
             .route("/signup", post(signup))
             .route("/login", post(login))
             .route("/logout", post(logout))
             .route("/verify_2_fa", post(verify_2fa))
-            .route("/verify_token", post(verify_token));
+            .route("/verify_token", post(verify_token))
+            .with_state(app_state);
 
         let listener = tokio::net::TcpListener::bind(address).await?;
         let address = listener.local_addr()?.to_string();
