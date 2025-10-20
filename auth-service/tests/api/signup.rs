@@ -1,4 +1,4 @@
-use auth_service::routes::SignupResponse;
+use auth_service::{routes::SignupResponse, ErrorResponse};
 
 use crate::helpers::{get_random_email, TestApp};
 
@@ -63,4 +63,94 @@ async fn should_return_201_if_valid_input() {
             .expect("Could not deserialize response body to UserBody"),
         expected_response
     );
+}
+
+#[tokio::test]
+async fn should_return_400_if_invalid_input() {
+    // The signup route should return a 400 HTTP status code if an invalid input is sent.
+    // The input is considered invalid if:
+    // - The email is empty or does not contain '@'
+    // - The password is less than 8 characters
+    // Create an array of invalid inputs. Then, iterate through the array and 
+    let inputs = vec![
+        serde_json::json!({
+            "email":"",
+            "password": "12345678",
+            "requires_2fa": true
+        }), 
+        serde_json::json!({
+            "email":"invalid_email_with_out_at",
+            "password": "12345678",
+            "requires_2fa": true
+        }),
+        serde_json::json!({
+            "email":"user@example.com",
+            "password": "short",
+            "requires_2fa": false
+        }),
+        serde_json::json!({
+            "email":"another.user@domain.org",
+            "password": "1234567",
+            "requires_2fa": true
+        }),
+        serde_json::json!({
+            "email":"user@test.com",
+            "password": "",
+            "requires_2fa": true
+        }),
+        ];
+        
+    let app = TestApp::new().await;
+
+    // make HTTP calls to the signup route. Assert a 400 HTTP status code is returned.
+    for input in &inputs {
+        let response = app.post_signup(input).await;
+        assert_eq!(
+            response.status().as_u16(),
+            400,
+            "Failed for input: {:?}",
+            input 
+        );
+
+        assert_eq!(
+            response
+                .json::<ErrorResponse>()
+                .await
+                .expect("Could not deserialize response body to ErrorResponse")
+                .error,
+            "Invalid Input".to_owned()
+        );    
+    }
+}
+
+#[tokio::test]
+async fn should_return_409_if_email_already_exists() {
+    // Call the signup route twice. The second request should fail with a 409 HTTP status code    
+    let signup_request=  serde_json::json!({
+            "email":"test@email.com",
+            "password": "12345678",
+            "requires_2fa": true
+        }); 
+    let app = TestApp::new().await;
+
+    // make HTTP calls to the signup route. Assert a 400 HTTP status code is returned.
+    app.post_signup(&signup_request).await;
+    
+    let response = app.post_signup(&signup_request).await;
+    assert_eq!(
+        response.status().as_u16(),
+        409,
+        "Failed for input: {:?}",
+        &signup_request
+    );    
+
+    assert_eq!(
+        response
+            .json::<ErrorResponse>()
+            .await
+            .expect("Could not deserialize response body to ErrorResponse")
+            .error,
+        "User already exists".to_owned()
+    );
+    
 }
