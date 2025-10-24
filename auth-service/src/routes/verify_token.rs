@@ -16,9 +16,9 @@ pub async fn verify_token(
 ) -> 
 Result<impl IntoResponse, AuthAPIError> {
     let VerifyToken { token } = request;
-    let mut banned_token_store = state.banned_token_store.write().await;
+    let banned_token_store = state.banned_token_store.clone();
 
-    match validate_token(&token, Some(&mut *banned_token_store)).await {
+    match validate_token(&token, banned_token_store).await {
         Ok(_) => {
             return Ok(StatusCode::OK);
         },

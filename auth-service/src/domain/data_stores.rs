@@ -25,5 +25,5 @@ pub enum BannedTokenStoreError {
 #[async_trait::async_trait]
 pub trait BannedTokenStore {
     async fn add_token(&mut self, token: String) -> Result<(), BannedTokenStoreError>;
-    async fn is_banned_token(&mut self, token: &str) -> Result<bool, BannedTokenStoreError>;
+    async fn is_banned_token(&self, token: &str) -> Result<bool, BannedTokenStoreError>;
 }
