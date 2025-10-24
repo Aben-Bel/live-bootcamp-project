@@ -1,12 +1,16 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::{HashMap, HashSet}, sync::Arc};
 
-use auth_service::{app_state::AppState, services::hashmap_user_store::HashmapUserStore, Application};
-use reqwest;
+use auth_service::{
+    app_state::AppState, services::{hashmap_user_store::HashmapUserStore, hashset_banned_token_store::HashsetBannedTokenStore}, utils::constants::test,
+    Application,
+};
+use reqwest::{self, cookie::Jar};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
 pub struct TestApp {
     pub address: String,
+    pub cookie_jar: Arc<Jar>,
     pub http_client: reqwest::Client,
 }
 
@@ -16,11 +20,16 @@ impl TestApp {
             users : HashMap::new()
         })); 
 
-        let app_state = AppState {
-            user_store : user_store
-        }; 
+        let banned_token_store = Arc::new(RwLock::new(HashsetBannedTokenStore {
+            tokens : HashSet::new()
+        }));
 
-        let app = Application::build(app_state, "0.0.0.0:0")
+        let app_state = AppState {
+            user_store : user_store,
+            banned_token_store: banned_token_store
+        };
+
+        let app = Application::build(app_state, test::APP_ADDRESS)
             .await
             .expect("Failed to build app");
 
@@ -31,10 +40,18 @@ impl TestApp {
         #[allow(clippy::let_underscore_future)]
         let _ = tokio::spawn(app.run());
 
-        let http_client = reqwest::Client::new(); // Create a Reqwest http client instance
+        let cookie_jar = Arc::new(Jar::default());
+        let http_client = reqwest::Client::builder()
+            .cookie_provider(cookie_jar.clone())
+            .build()
+            .unwrap();
 
         // Create new `TestApp` instance and return it
-        TestApp {address, http_client}
+        Self {
+            address,
+            cookie_jar,
+            http_client,
+        }
     }
 
     pub async fn get_root(&self) -> reqwest::Response {
@@ -90,16 +107,10 @@ impl TestApp {
         response
     }
 
-    pub async fn logout(&self, email : String)-> reqwest::Response {
-        #[derive(serde::Serialize)]
-        struct LogoutData {
-            email: String
-        }
-
+    pub async fn logout(&self)-> reqwest::Response {
 
        let response = self.http_client
             .post(format!("{}{}",&self.address, "/logout"))
-            .json(&LogoutData { email })
             .send()
             .await
             .expect("Failed to execute request");
@@ -136,7 +147,7 @@ impl TestApp {
         }
 
         let response = self.http_client
-                .post(format!("{}{}",&self.address, "/verify_token"))
+                .post(format!("{}{}",&self.address, "/verify-token"))
                 .json(&VerifyToken { token })
                 .send()
                 .await
@@ -151,6 +162,31 @@ impl TestApp {
     {
         self.http_client
             .post(&format!("{}/signup", &self.address))
+            .json(body)
+            .send()
+            .await
+            .expect("Failed to execute request.")
+    }
+
+    pub async fn post_login<Body>(&self, body: &Body) -> reqwest::Response 
+    where 
+        Body: serde::Serialize,
+    {
+
+        self.http_client
+            .post(&format!("{}/login", &self.address))
+            .json(body)
+            .send()
+            .await
+            .expect("Failed to execute request.")
+    }
+
+    pub async fn post_verify_token<Body>(&self, body: &Body) -> reqwest::Response
+    where
+        Body: serde::Serialize,
+    {
+        self.http_client
+            .post(format!("{}/verify-token", &self.address))
             .json(body)
             .send()
             .await
