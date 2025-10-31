@@ -1,8 +1,13 @@
-use std::{collections::{HashMap, HashSet}, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use auth_service::{
-    app_state::AppState, services::{hashmap_user_store::HashmapUserStore, hashset_banned_token_store::HashsetBannedTokenStore}, utils::constants::test,
-    Application,
+    Application, app_state::{AppState, TwoFACodeStoreType}, services::{
+        hashmap_two_fa_code_store::HashmapTwoFACodeStore, hashmap_user_store::HashmapUserStore,
+        hashset_banned_token_store::HashsetBannedTokenStore, mock_email_client::MockEmailClient,
+    }, utils::constants::test
 };
 use reqwest::{self, cookie::Jar};
 use tokio::sync::RwLock;
@@ -12,21 +17,30 @@ pub struct TestApp {
     pub address: String,
     pub cookie_jar: Arc<Jar>,
     pub http_client: reqwest::Client,
+    pub two_fa_code_store: TwoFACodeStoreType,
 }
 
 impl TestApp {
     pub async fn new() -> Self {
         let user_store = Arc::new(RwLock::new(HashmapUserStore {
-            users : HashMap::new()
-        })); 
-
-        let banned_token_store = Arc::new(RwLock::new(HashsetBannedTokenStore {
-            tokens : HashSet::new()
+            users: HashMap::new(),
         }));
 
+        let banned_token_store = Arc::new(RwLock::new(HashsetBannedTokenStore {
+            tokens: HashSet::new(),
+        }));
+
+        let two_fa_code_store = Arc::new(RwLock::new(HashmapTwoFACodeStore {
+            codes: HashMap::new(),
+        }));
+
+        let email_client = Arc::new(RwLock::new(MockEmailClient));
+
         let app_state = AppState {
-            user_store : user_store,
-            banned_token_store: banned_token_store
+            user_store: user_store,
+            banned_token_store: banned_token_store,
+            two_fa_code_store: two_fa_code_store.clone(),
+            email_client,
         };
 
         let app = Application::build(app_state, test::APP_ADDRESS)
@@ -36,7 +50,7 @@ impl TestApp {
         let address = format!("http://{}", app.address.clone());
 
         // Run the auth service in a separate async task
-        // to avoid blocking the main test thread. 
+        // to avoid blocking the main test thread.
         #[allow(clippy::let_underscore_future)]
         let _ = tokio::spawn(app.run());
 
@@ -51,6 +65,7 @@ impl TestApp {
             address,
             cookie_jar,
             http_client,
+            two_fa_code_store: two_fa_code_store.clone()
         }
     }
 
@@ -63,42 +78,48 @@ impl TestApp {
     }
 
     // TODO: Implement helper functions for all other routes (signup, login, logout, verify-2fa, and verify-token)
-    pub async fn signup(&self, email : String, password :  String, requires2fa : bool )-> reqwest::Response {
+    pub async fn signup(
+        &self,
+        email: String,
+        password: String,
+        requires2fa: bool,
+    ) -> reqwest::Response {
         #[derive(serde::Serialize)]
         struct SignupData {
             email: String,
             password: String,
             requires2fa: bool,
         }
-        
+
         let sign_up_data = SignupData {
-            email, password, requires2fa
+            email,
+            password,
+            requires2fa,
         };
-        println!("{}", format!("{}{}",&self.address, "/signup"));
-        let response = self.http_client
-            .post(format!("{}{}",&self.address, "/signup"))
+        println!("{}", format!("{}{}", &self.address, "/signup"));
+        let response = self
+            .http_client
+            .post(format!("{}{}", &self.address, "/signup"))
             .json(&sign_up_data)
             .send()
             .await
             .expect("Failed to execute request");
 
-        response   
+        response
     }
 
-    pub async fn login(&self, email : String, password :  String)-> reqwest::Response {
-
+    pub async fn login(&self, email: String, password: String) -> reqwest::Response {
         #[derive(serde::Serialize)]
         struct LoginData {
             email: String,
             password: String,
         }
-        
-        let login_data = LoginData {
-            email, password
-        };
-        
-        let response = self.http_client
-            .post(format!("{}{}",&self.address, "/login"))
+
+        let login_data = LoginData { email, password };
+
+        let response = self
+            .http_client
+            .post(format!("{}{}", &self.address, "/login"))
             .json(&login_data)
             .send()
             .await
@@ -107,10 +128,10 @@ impl TestApp {
         response
     }
 
-    pub async fn logout(&self)-> reqwest::Response {
-
-       let response = self.http_client
-            .post(format!("{}{}",&self.address, "/logout"))
+    pub async fn logout(&self) -> reqwest::Response {
+        let response = self
+            .http_client
+            .post(format!("{}{}", &self.address, "/logout"))
             .send()
             .await
             .expect("Failed to execute request");
@@ -118,20 +139,28 @@ impl TestApp {
         response
     }
 
-    pub async fn verify_2fa(&self, email : String, login_attempt_id : String, two_fa_code : String)-> reqwest::Response {
+    pub async fn verify_2fa(
+        &self,
+        email: String,
+        login_attempt_id: String,
+        two_fa_code: String,
+    ) -> reqwest::Response {
         #[derive(serde::Serialize)]
         struct Verify2FA {
             email: String,
             login_attempt_id: String,
             two_fa_code: String,
         }
-        
+
         let verify_2_fa = Verify2FA {
-            email, login_attempt_id, two_fa_code
+            email,
+            login_attempt_id,
+            two_fa_code,
         };
-        
-        let response = self.http_client
-            .post(format!("{}{}",&self.address, "/verify_2_fa"))
+
+        let response = self
+            .http_client
+            .post(format!("{}{}", &self.address, "/verify-2fa"))
             .json(&verify_2_fa)
             .send()
             .await
@@ -140,21 +169,22 @@ impl TestApp {
         response
     }
 
-    pub async fn verify_token(&self, token : String)-> reqwest::Response {
+    pub async fn verify_token(&self, token: String) -> reqwest::Response {
         #[derive(serde::Serialize)]
         struct VerifyToken {
-            token: String
+            token: String,
         }
 
-        let response = self.http_client
-                .post(format!("{}{}",&self.address, "/verify-token"))
-                .json(&VerifyToken { token })
-                .send()
-                .await
-                .expect("Failed to execute request");
+        let response = self
+            .http_client
+            .post(format!("{}{}", &self.address, "/verify-token"))
+            .json(&VerifyToken { token })
+            .send()
+            .await
+            .expect("Failed to execute request");
 
-            response
-        }
+        response
+    }
 
     pub async fn post_signup<Body>(&self, body: &Body) -> reqwest::Response
     where
@@ -168,11 +198,10 @@ impl TestApp {
             .expect("Failed to execute request.")
     }
 
-    pub async fn post_login<Body>(&self, body: &Body) -> reqwest::Response 
-    where 
+    pub async fn post_login<Body>(&self, body: &Body) -> reqwest::Response
+    where
         Body: serde::Serialize,
     {
-
         self.http_client
             .post(&format!("{}/login", &self.address))
             .json(body)
@@ -192,8 +221,22 @@ impl TestApp {
             .await
             .expect("Failed to execute request.")
     }
+
+    pub async fn post_verify_2fa<Body>(&self, body: &Body) -> reqwest::Response
+    where
+        Body: serde::Serialize,
+    {
+        self.http_client
+            .post(format!("{}/verify-2fa", &self.address))
+            .json(body)
+            .send()
+            .await
+            .expect("Failed to execute request.")
+    }
 }
 
 pub fn get_random_email() -> String {
     format!("{}@example.com", Uuid::new_v4())
 }
+
+
